@@ -1,0 +1,28 @@
+name: vmmanager-tenant-connector
+
+services:
+  guacd-connector:
+    image: guacamole/guacd:1.6.0
+    restart: unless-stopped
+    command: ["-b", "0.0.0.0", "-l", "4822", "-C", "/run/connector/tls.crt", "-K", "/run/connector/tls.key"]
+    ports:
+      # Bind only to the tenant VPN/tunnel address, never to a public interface.
+      - "${TENANT_CONNECTOR_BIND_IP:?Set the private VPN address}:4822:4822"
+    volumes:
+      - "${TENANT_CONNECTOR_CERT_DIR:?Set certificate directory}/tls.crt:/run/connector/tls.crt:ro"
+      - "${TENANT_CONNECTOR_CERT_DIR:?Set certificate directory}/tls.key:/run/connector/tls.key:ro"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      # FreeRDP and fontconfig require a writable runtime/cache directory.
+      - /home/guacd:rw,nosuid,nodev,size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 4822 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

@@ -1,0 +1,200 @@
+name: vmmanager
+
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    hostname: mssql
+    restart: unless-stopped
+    environment:
+      HOME: /var/opt/mssql
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: ${MSSQL_PID:-Express}
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env}
+      MSSQL_MEMORY_LIMIT_MB: ${MSSQL_MEMORY_LIMIT_MB:-2048}
+    volumes:
+      # All database files, logs, configuration and SQL secrets survive container recreation.
+      - "${VM_MANAGER_DATA_ROOT:?Set VM_MANAGER_DATA_ROOT in .env}/mssql:/var/opt/mssql"
+    expose:
+      - "1433"
+    networks:
+      - database
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$${MSSQL_SA_PASSWORD}" -C -Q "SELECT 1" -b -o /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  mssql-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    restart: "no"
+    depends_on:
+      mssql:
+        condition: service_healthy
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env}
+      MSSQL_DATABASE: ${MSSQL_DATABASE:-VMManager}
+      MSSQL_APP_USER: ${MSSQL_APP_USER:-vmmanager}
+      MSSQL_APP_PASSWORD: ${MSSQL_APP_PASSWORD:?Set MSSQL_APP_PASSWORD in .env}
+    volumes:
+      - ./deployment/mssql/init.sql:/scripts/init.sql:ro
+    networks:
+      - database
+    security_opt:
+      - no-new-privileges:true
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >-
+        /opt/mssql-tools18/bin/sqlcmd -S mssql -U sa -P "$${MSSQL_SA_PASSWORD}" -C -b
+        -v DatabaseName="$${MSSQL_DATABASE}" AppUser="$${MSSQL_APP_USER}" AppPassword="$${MSSQL_APP_PASSWORD}"
+        -i /scripts/init.sql
+
+  guacd:
+    image: guacamole/guacd:1.6.0
+    restart: unless-stopped
+    networks:
+      - remote-console
+    expose:
+      - "4822"
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 4822 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  guacamole:
+    image: guacamole/guacamole:1.6.0
+    restart: unless-stopped
+    depends_on:
+      vmmanager:
+        condition: service_healthy
+    environment:
+      GUACD_HOSTNAME: vmmanager
+      GUACD_PORT: "4822"
+      JSON_ENABLED: "true"
+      JSON_SECRET_KEY: ${GUACAMOLE_JSON_SECRET_KEY:?Set GUACAMOLE_JSON_SECRET_KEY in .env}
+      REMOTE_IP_VALVE_ENABLED: "true"
+      WEBAPP_CONTEXT: guacamole
+    networks:
+      - remote-console
+    expose:
+      - "8080"
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -c 'echo > /dev/tcp/127.0.0.1/8080'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  vmmanager:
+    image: ${VM_MANAGER_IMAGE:-ghcr.io/team-netz-consulting/vmmanager}:${VM_MANAGER_IMAGE_TAG:-latest}
+    hostname: vmmanager
+    restart: unless-stopped
+    depends_on:
+      mssql-init:
+        condition: service_completed_successfully
+      guacd:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ConnectionStrings__DefaultConnection: "Server=mssql,1433;Database=${MSSQL_DATABASE:-VMManager};User Id=${MSSQL_APP_USER:-vmmanager};Password=${MSSQL_APP_PASSWORD:?Set MSSQL_APP_PASSWORD in .env};Encrypt=True;TrustServerCertificate=True;MultipleActiveResultSets=True;Connect Timeout=30;Max Pool Size=100"
+      Jwt__Issuer: ${JWT_ISSUER:-VMManager}
+      Jwt__Audience: ${JWT_AUDIENCE:-VMManager}
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:?Set JWT_SIGNING_KEY in .env}
+      Bootstrap__AdminEmail: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      Bootstrap__AdminPassword: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      DataProtection__KeysPath: /var/lib/vmmanager/keys
+      LicenseManager__BaseUrl: ${LICENSE_MANAGER_BASE_URL:-https://license.team-netz.net:5181}
+      LicenseManager__AllowInvalidCertificate: ${LICENSE_MANAGER_ALLOW_INVALID_CERTIFICATE:-false}
+      LicenseManager__CustomerName: ${LICENSE_CUSTOMER_NAME:?Set LICENSE_CUSTOMER_NAME in .env}
+      LicenseManager__ProductName: VMManager
+      LicenseManager__LicensePath: /var/lib/vmmanager/license/vmmanager.license
+      LicenseManager__SettingsPath: /var/lib/vmmanager/license/settings.json
+      LicenseManager__PublicKeyPath: /app/Data/license/public-key.pem
+      LicenseManager__RequestedDeviceClaims__0: hostname
+      # Clear the appsettings.json macAddress entry: container MACs change when Compose recreates a container.
+      LicenseManager__RequestedDeviceClaims__1: ""
+      ReverseProxy__Enabled: "true"
+      ReverseProxy__KnownNetwork: ${VM_MANAGER_FRONTEND_SUBNET:-172.30.0.0/24}
+      RemoteConsole__Enabled: ${REMOTE_CONSOLE_ENABLED:-true}
+      RemoteConsole__BaseUrl: /remote-console/
+      RemoteConsole__InternalBaseUrl: http://guacamole:8080/guacamole/
+      RemoteConsole__JsonSecretKey: ${GUACAMOLE_JSON_SECRET_KEY:?Set GUACAMOLE_JSON_SECRET_KEY in .env}
+      RemoteConsole__RoutingSecretKey: ${REMOTE_CONSOLE_ROUTING_SECRET_KEY:?Set REMOTE_CONSOLE_ROUTING_SECRET_KEY in .env}
+      RemoteConsole__RouterPort: "4822"
+      RemoteConsole__RouterMaxConnections: ${REMOTE_CONSOLE_MAX_CONNECTIONS:-200}
+      RemoteConsole__DirectGuacdHost: guacd
+      RemoteConsole__DirectGuacdPort: "4822"
+      RemoteConsole__RdpServerLayout: ${REMOTE_CONSOLE_RDP_SERVER_LAYOUT:-de-de-qwertz}
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      # Provider credentials and login cookies remain decryptable after container recreation.
+      - "${VM_MANAGER_DATA_ROOT:?Set VM_MANAGER_DATA_ROOT in .env}/dataprotection:/var/lib/vmmanager/keys"
+      # Signed license and trusted public key survive container recreation.
+      - "${VM_MANAGER_DATA_ROOT:?Set VM_MANAGER_DATA_ROOT in .env}/license:/var/lib/vmmanager/license"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    read_only: true
+    expose:
+      - "8080"
+      - "4822"
+    networks:
+      - frontend
+      - database
+      - remote-console
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  nginx:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    depends_on:
+      vmmanager:
+        condition: service_healthy
+    environment:
+      NGINX_SERVER_NAME: ${NGINX_SERVER_NAME:-_}
+      NGINX_ENVSUBST_FILTER: ^NGINX_SERVER_NAME$
+    ports:
+      - "${VM_MANAGER_HTTP_PORT:-80}:80"
+      - "${VM_MANAGER_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deployment/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - "${VM_MANAGER_DATA_ROOT:?Set VM_MANAGER_DATA_ROOT in .env}/nginx/certs:/etc/nginx/certs:ro"
+      - "${VM_MANAGER_DATA_ROOT:?Set VM_MANAGER_DATA_ROOT in .env}/nginx/logs:/var/log/nginx"
+    networks:
+      - frontend
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider --no-check-certificate https://127.0.0.1/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  frontend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${VM_MANAGER_FRONTEND_SUBNET:-172.30.0.0/24}
+  database:
+    driver: bridge
+    internal: true
+  remote-console:
+    name: vmmanager-remote-console
+    driver: bridge

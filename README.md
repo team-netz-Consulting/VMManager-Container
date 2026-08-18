@@ -49,9 +49,17 @@ VMManager wird als Docker-Compose-Stack mit folgenden Komponenten betrieben:
 - Nginx als TLS-Reverse-Proxy
 - Apache Guacamole und `guacd` für RDP- und SSH-Konsolen
 
-Die kundenspezifische Bereitstellung enthält eine `.env.example` und eine dazu passende
-`docker-compose.yml`. Vor dem ersten Start werden die persistenten Verzeichnisse, TLS-Zertifikate,
-Kennwörter und Schlüssel eingerichtet. Danach wird der Stack gestartet:
+Das öffentliche Repository enthält die `.env.example`, die dazu passende `docker-compose.yml`,
+Nginx- und SQL-Konfiguration sowie den optionalen Tenant-Connector. Es kann direkt auf den
+Docker-Host geklont werden:
+
+```bash
+git clone https://github.com/team-netz-Consulting/VMManager-Container.git
+cd VMManager-Container
+```
+
+Vor dem ersten Start werden die persistenten Verzeichnisse, TLS-Zertifikate, Kennwörter und
+Schlüssel eingerichtet. Danach wird der Stack gestartet:
 
 ```bash
 cp .env.example .env
@@ -62,12 +70,33 @@ docker compose up -d
 docker compose ps
 ```
 
+Das TLS-Zertifikat und sein privater Schlüssel werden unterhalb von `VM_MANAGER_DATA_ROOT` erwartet:
+
+```text
+nginx/certs/fullchain.pem
+nginx/certs/privkey.pem
+```
+
 Eine Aktualisierung erfolgt durch Änderung des festen Image-Tags in `.env`:
 
 ```bash
 docker compose pull
 docker compose up -d --remove-orphans
 ```
+
+## Tenant-Connector
+
+Für getrennte Kundennetze oder überlappende IP-Adressbereiche wird der Connector in dem jeweiligen
+Kundennetz installiert:
+
+```bash
+cd tenant-connector
+./install.sh
+```
+
+Das Installationsskript erstellt ein selbstsigniertes TLS-Zertifikat, startet den Connector und
+zeigt den SHA-256-Fingerabdruck zur Übernahme in die VMManager-Tenantkonfiguration an. Port 4822 darf
+nur über das private VPN oder den vereinbarten Tunnel vom VMManager erreichbar sein.
 
 ## Funktionsbereiche
 

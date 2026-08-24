@@ -58,6 +58,20 @@ git clone https://github.com/team-netz-Consulting/VMManager-Container.git
 cd VMManager-Container
 ```
 
+Für eine neue Installation übernimmt das Installationsskript die vollständige Einrichtung unter
+`/opt/vmmanager`. Es erzeugt sichere SQL-, Owner-, JWT-, Guacamole- und Routing-Schlüssel, richtet
+die persistenten Verzeichnisse mit den erforderlichen Container-UIDs ein und startet den Stack:
+
+```bash
+sudo ./install.sh
+```
+
+Das Skript fragt DNS-Namen, Owner-E-Mail, Lizenz-Kundenname und Image-Version ab. Die einmaligen
+Owner-Zugangsdaten werden ausschließlich root-lesbar unter
+`/opt/vmmanager/ERSTANMELDUNG.txt` gespeichert. Ohne vorhandenes TLS-Zertifikat wird ein 30 Tage
+gültiges selbstsigniertes Startzertifikat erzeugt; für den Produktivbetrieb muss es ersetzt werden.
+Eine vorhandene `/opt/vmmanager/.env` und bestehende Nutzdaten werden nicht überschrieben.
+
 Vor dem ersten Start werden die persistenten Verzeichnisse, TLS-Zertifikate, Kennwörter und
 Schlüssel eingerichtet. Danach wird der Stack gestartet:
 

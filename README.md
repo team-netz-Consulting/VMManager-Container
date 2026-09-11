@@ -26,7 +26,7 @@ ghcr.io/team-netz-consulting/vmmanager
 Für produktive Installationen immer einen freigegebenen Versionstag verwenden:
 
 ```bash
-docker pull ghcr.io/team-netz-consulting/vmmanager:2026.09.10.0640
+docker pull ghcr.io/team-netz-consulting/vmmanager:2026.09.10.1521
 ```
 
 `latest` verweist auf die zuletzt freigegebene Version, sollte aber nicht für dauerhaft
